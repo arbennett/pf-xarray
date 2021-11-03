@@ -10,6 +10,7 @@ import yaml
 from . import util
 from .io import ParflowBinaryReader, read_stack_of_pfbs, read_pfb
 from collections.abc import Iterable
+from collections import OrderedDict
 from dask import delayed
 from parflow.tools import hydrology
 from parflowio.pyParflowio import PFData
@@ -141,22 +142,15 @@ class ParflowBackendEntrypoint(BackendEntrypoint):
             filename_or_obj,
             lock=None,
             dims=None,
-            shape=None
+            shape=None,
+            timestep=None
     ) -> xr.DataArray:
         """
         Load a `pfb` file directly as an xr.DataArray
         """
-        if lock in (True, None):
-            lock = PARFLOW_LOCK
-        elif lock is False:
-            lock = NO_LOCK
-        manager = CachingFileManager(ParflowDataManager, filename_or_obj)
-        if not dims:
-            dims = ('x', 'y', 'z')
-        data = indexing.LazilyIndexedArray(
-            ParflowBackendArray(manager, lock=lock, dims=dims, shape=shape))
-        var = xr.Variable(dims, data)
-        return var
+        store = PFBDataStore(filename_or_obj, timestep)
+        ds = xr.Dataset.load_store(store)
+        return ds
 
     def load_pfb_from_meta(self, var_meta, component=None, parallel=False):
         """
@@ -243,6 +237,74 @@ class ParflowBackendEntrypoint(BackendEntrypoint):
             if filename_or_obj.endswith(ext):
                 return True
         return False
+
+
+class PFBDataStore(xr.backends.common.AbstractDataStore):
+    """
+    Representation of Parflow binary file storage format
+    for a single model run, variable, and timestep
+
+    This is loosely based off of the xmitgcm::_MDSDataStore
+    """
+
+    def __init__(self, file, timestep=None, varname='parflow_variable',
+                 dimensions=['x', 'y', 'z'],
+                 header=None, subgrid_info={}, dtype=np.float64,
+                 z_is_time=False, z_variables=False, var_attrs={}):
+        self._attributes = {}
+        self._dimensions = dimensions
+        if z_is_time:
+            self._dimensions = [d.replace('z', 'time') for d in self._dimensions]
+        self._variables = OrderedDict()
+        self._header = header
+
+        if not self._header:
+            with ParflowBinaryReader(file) as pfb:
+                self._header = pfb.header
+
+        for dim in self._dimensions:
+            attrs = self._attributes.get(dim, {})
+            data = np.arange(0, self._header[f'n{dim}'])
+            dim_variable = xr.Variable(dim, data, attrs)
+            self._variables[dim] = dim_variable
+
+        if timestep is not None and not z_is_time:
+            self._variables['time'] = xr.Variable('time', [0], {})
+
+        if subgrid_info:
+            need_subgrid_info = False
+        else:
+            need_subgrid_info = True
+
+        with ParflowBinaryReader(
+                file,
+                header=header,
+                precompute_subgrid_info=need_subgrid_info
+        ) as pfb:
+            for k, v in subgrid_info.items():
+                set_attr(pfb, k, v)
+            data = pfb.read_all_subgrids()
+        self._variables[varname] = xr.Variable(dimensions, data, var_attrs)
+
+    def get_variables(self):
+        return self._variables
+
+    def get_attrs(self):
+        return self._attributes
+
+    def get_dimensions(self):
+        return self._dimensions
+
+    def close(self):
+        for var in list(self._variables):
+            del self._variables[var]
+
+
+""" ------------------------ BEGIN LEGACY CODE ---------------------------- """
+""" ------------------------ BEGIN LEGACY CODE ---------------------------- """
+""" ------------------------ BEGIN LEGACY CODE ---------------------------- """
+""" ------------------------ BEGIN LEGACY CODE ---------------------------- """
+""" ------------------------ BEGIN LEGACY CODE ---------------------------- """
 
 
 @delayed
