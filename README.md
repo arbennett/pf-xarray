@@ -1,3 +1,9 @@
+# This repo is being archived!
+
+The functionality implemented in this repo has been merged into the
+main parflow repo. For further details see:
+https://github.com/parflow/parflow/blob/master/RELEASE-NOTES.md#parflow-release-notes-3100
+
 # pf-xarray
 Open parflow files with xarray
 
